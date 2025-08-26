@@ -231,7 +231,7 @@
             </div>
 
              <div class="search-filter">
-                <label><input type="checkbox" id="filterInconsistent"> Gerar somente com METARs inconsistentes</label>
+                <label><input type="checkbox" id="filterInconsistent"> Gerar somente com mensagens inconsistentes</label>
             </div>
 
             <div class="search-controls">
@@ -277,7 +277,7 @@
     <script>
         const CONFIG = {
             localidade: 'SBIZ',
-            apiKey: 'f2wxxozlu1MgAZzFvFBldekAOsWs1V9R4e5546WO', // INSIRA SUA CHAVE DE API VÁLIDA AQUI
+            apiKey: 'f2wxxozlu1MgAZzFvFBldekAOsWs1V9R4e5546WO',
             apiUrl: 'https://api-redemet.decea.mil.br/mensagens/metar/',
             intervaloConsulta: 40000,
             tempoAlerta: 2,
@@ -401,7 +401,6 @@
             
             const data_ini = date.replace(/-/g, '') + '00';
             const data_fim = date.replace(/-/g, '') + '23';
-
             const url = `${CONFIG.apiUrl}${icao}?api_key=${CONFIG.apiKey}&data_ini=${data_ini}&data_fim=${data_fim}`;
 
             try {
@@ -411,19 +410,10 @@
                 if (!response.ok) throw new Error(`Erro de rede: ${response.statusText}`);
                 if (!data.status && data.message && !data.message.includes("data inicial ou final")) throw new Error(data.message);
 
-                let dadosParaRelatorio = [];
-                if (data.data && data.data.data && data.data.data.length > 0) {
-                    dadosParaRelatorio = data.data.data;
-                }
+                let dadosParaRelatorio = (data.data && data.data.data && data.data.data.length > 0) ? data.data.data : [];
 
-                // Aplica o filtro se o checkbox estiver marcado
                 if (elements.filterInconsistent.checked) {
-                    dadosParaRelatorio = dadosParaRelatorio.filter(msg => {
-                        const tipo = msg.mens.trim().startsWith('SPECI') ? 'SPECI' : 'METAR';
-                        const timestamp = new Date(msg.recebimento);
-                        const minuto = timestamp.getMinutes();
-                        return tipo === 'METAR' && minuto >= 5 && minuto < 55;
-                    });
+                    dadosParaRelatorio = dadosParaRelatorio.filter(msg => isMessageInconsistent(msg));
                 }
                 
                 if (dadosParaRelatorio.length > 0) {
@@ -432,10 +422,10 @@
                     gerarPDFHistorico(dadosParaRelatorio, icao, date, 'daily');
                 } else {
                     const dataFormatada = new Date(date.replace(/-/g, '/')).toLocaleDateString();
-                    const msg = elements.filterInconsistent.checked 
-                        ? `Nenhum METAR inconsistente encontrado para ${icao} na data ${dataFormatada}.`
+                    const msgText = elements.filterInconsistent.checked 
+                        ? `Nenhuma mensagem inconsistente encontrada para ${icao} na data ${dataFormatada}.`
                         : `Nenhuma mensagem encontrada para ${icao} na data ${dataFormatada}.`;
-                    statusEl.textContent = msg;
+                    statusEl.textContent = msgText;
                     statusEl.style.color = 'var(--warning-color)';
                 }
             } catch (error) {
@@ -490,12 +480,7 @@
 
                 let dadosParaRelatorio = todasAsMensagens;
                 if (elements.filterInconsistent.checked) {
-                    dadosParaRelatorio = dadosParaRelatorio.filter(msg => {
-                        const tipo = msg.mens.trim().startsWith('SPECI') ? 'SPECI' : 'METAR';
-                        const timestamp = new Date(msg.recebimento);
-                        const minuto = timestamp.getMinutes();
-                        return tipo === 'METAR' && minuto >= 5 && minuto < 55;
-                    });
+                    dadosParaRelatorio = dadosParaRelatorio.filter(msg => isMessageInconsistent(msg));
                 }
 
                 if (dadosParaRelatorio.length > 0) {
@@ -504,10 +489,10 @@
                     gerarPDFHistorico(dadosParaRelatorio, icao, monthValue, 'monthly');
                 } else {
                     const monthName = new Date(year, month - 1, 1).toLocaleString('pt-BR', { month: 'long' });
-                    const msg = elements.filterInconsistent.checked
-                        ? `Nenhum METAR inconsistente encontrado para ${icao} em ${monthName} de ${year}.`
+                    const msgText = elements.filterInconsistent.checked
+                        ? `Nenhuma mensagem inconsistente encontrada para ${icao} em ${monthName} de ${year}.`
                         : `Nenhuma mensagem encontrada para ${icao} em ${monthName} de ${year}.`;
-                    statusEl.textContent = msg;
+                    statusEl.textContent = msgText;
                     statusEl.style.color = 'var(--warning-color)';
                 }
 
@@ -519,6 +504,43 @@
                 buttonEl.disabled = false;
                 buttonEl.textContent = 'Gerar Relatório';
             }
+        }
+        
+        function isMessageInconsistent(msgObject) {
+            const mensText = msgObject.mens || '';
+            const recepcaoInfo = msgObject.timestamp || msgObject.recebimento;
+            if (!mensText || !recepcaoInfo) return false;
+
+            // CORREÇÃO: Força a interpretação da string de recebimento como UTC
+            const recepcaoDate = new Date((typeof recepcaoInfo === 'string' ? recepcaoInfo.replace(' ', 'T') + 'Z' : recepcaoInfo));
+            if (isNaN(recepcaoDate.getTime())) return false;
+
+            const tipo = mensText.trim().startsWith('SPECI') ? 'SPECI' : 'METAR';
+            
+            if (tipo === 'METAR') {
+                const minutoRecepcao = recepcaoDate.getUTCMinutes();
+                return minutoRecepcao >= 5 && minutoRecepcao < 55;
+            }
+            
+            if (tipo === 'SPECI') {
+                const regex = /\s(\d{2})(\d{2})(\d{2})Z\s/;
+                const match = mensText.match(regex);
+                if (match) {
+                    const msgDay = parseInt(match[1], 10);
+                    const msgHour = parseInt(match[2], 10);
+                    const msgMinute = parseInt(match[3], 10);
+                    
+                    const msgDate = new Date(Date.UTC(recepcaoDate.getUTCFullYear(), recepcaoDate.getUTCMonth(), msgDay, msgHour, msgMinute));
+                    
+                    const recepcaoTruncada = new Date(recepcaoDate);
+                    recepcaoTruncada.setUTCSeconds(0, 0);
+
+                    const diffEmMinutos = (recepcaoTruncada.getTime() - msgDate.getTime()) / (1000 * 60);
+
+                    return diffEmMinutos > 15;
+                }
+            }
+            return false;
         }
 
         function gerarPDFHistorico(mensagens, icao, dateValue, type) {
@@ -551,7 +573,7 @@
                 if (match) {
                     horaUTC = `${match[2]}${match[3]}Z`;
                 }
-                return { tipo, timestamp: new Date(msg.recebimento), horaUTC };
+                return { mens: msg.mens, recebimento: msg.recebimento, tipo: tipo, timestamp: new Date(msg.recebimento), horaUTC: horaUTC };
             }).sort((a,b) => a.timestamp - b.timestamp);
 
             const tableRows = dadosFormatados.map(d => [d.tipo, d.horaUTC, d.timestamp.toLocaleDateString('pt-BR'), d.timestamp.toLocaleTimeString('pt-BR')]);
@@ -561,10 +583,8 @@
                 didParseCell: function(data) {
                     if (data.section === 'body') {
                         const originalData = dadosFormatados[data.row.index];
-                        const minuto = originalData.timestamp.getMinutes();
-                        
-                        if (originalData.tipo === 'METAR' && minuto >= 5 && minuto < 55) {
-                            data.cell.styles.textColor = [239, 68, 68];
+                        if (isMessageInconsistent(originalData)) {
+                             data.cell.styles.textColor = [239, 68, 68];
                         }
                     }
                 }
@@ -633,7 +653,7 @@
         }
         
         function adicionarDadoDeRecebimento(timestampString, tipo) {
-            const timestamp = new Date(timestampString);
+            const timestamp = new Date(timestampString.replace(' ', 'T') + 'Z');
             if (!state.dadosRecebimento.some(d => d.timestamp.getTime() === timestamp.getTime())) {
                 state.dadosRecebimento.push({ timestamp, tipo });
                 salvarDadosRecebimento();
@@ -658,7 +678,7 @@
 
             let antecipado = 0, noPadrao = 0, foraPadrao = 0;
             state.dadosRecebimento.forEach(dado => {
-                const minuto = dado.timestamp.getMinutes();
+                const minuto = dado.timestamp.getUTCMinutes();
                 if (minuto >= 55) antecipado++;
                 else if (minuto >= 0 && minuto <= 4) noPadrao++;
                 else foraPadrao++;
@@ -700,7 +720,7 @@
                 didParseCell: function(data) {
                     if (data.section === 'body') {
                         const originalData = state.dadosRecebimento[data.row.index];
-                        const minuto = originalData.timestamp.getMinutes();
+                        const minuto = originalData.timestamp.getUTCMinutes();
                         if (minuto >= 5 && minuto < 55) {
                             data.cell.styles.textColor = [239, 68, 68];
                         }
